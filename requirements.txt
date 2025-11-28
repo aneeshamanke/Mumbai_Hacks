@@ -9,3 +9,14 @@ yfinance
 requests
 tavily-python
 wikipedia
+duckduckgo-search
+fastapi==0.111.0
+google-generativeai
+pydantic==2.8.2
+pymongo==4.7.1
+python-dotenv==1.0.1
+requests
+tavily-python
+uvicorn[standard]==0.30.1
+wikipedia
+yfinance
