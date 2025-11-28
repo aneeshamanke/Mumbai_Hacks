@@ -2,6 +2,7 @@ import datetime
 import requests
 import json
 import wikipedia
+import yfinance as yf
 from duckduckgo_search import DDGS
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Type
@@ -44,39 +45,45 @@ class Tool:
 class WebSearchInput(BaseModel):
     query: str = Field(description="The search query string")
 
-class WebSearchTool(Tool):
+class TavilySearchTool(Tool):
     def __init__(self):
         super().__init__(
             name="web_search",
-            description="Search the internet for current events, facts, or general knowledge.",
+            description="Search the internet for current events, facts, or general knowledge using Tavily. Returns detailed content.",
             args_schema=WebSearchInput
         )
+        from tavily import TavilyClient
+        import os
+        api_key = os.getenv("TAVILY_API_KEY")
+        if not api_key:
+             raise ValueError("TAVILY_API_KEY not found in environment variables")
+        self.client = TavilyClient(api_key=api_key)
 
     def run(self, args: Any) -> str:
         try:
             validated = self.validate_args(args)
             query = validated.query
-            kwargs = dict(
-                query=query,
-                max_results=3,
-                safesearch="off",
-                timelimit="m"
-
-            )
-            print(f"  [Tool] Running Web Search for: '{query}'")
-            with DDGS() as ddgs:
-                results = list(ddgs.text(query, max_results=3, **kwargs))
-                if not results:
-                    return "No results found."
+            print(f"  [Tool] Running Tavily Search for: '{query}'")
+            
+            # Use search_depth="advanced" for better results
+            response = self.client.search(query, search_depth="advanced", max_results=5)
+            
+            results = []
+            for r in response.get('results', []):
+                title = r.get('title', 'No Title')
+                content = r.get('content', 'No Content')
+                url = r.get('url', 'No URL')
+                results.append(f"- **{title}**\n  {content}\n  Source: {url}")
+            
+            if not results:
+                return "No relevant results found."
                 
-                formatted_results = []
-                for r in results:
-                    formatted_results.append(f"- {r['title']}: {r['body']} ({r['href']})")
-                return "\n".join(formatted_results)
+            return "\n\n".join(results)
+
         except ValidationError as e:
             return f"Argument Validation Error: {e}"
         except Exception as e:
-            return f"Error performing search: {e}"
+            return f"Error performing search: {str(e)}"
 
 class WeatherInput(BaseModel):
     city: str = Field(description="The city name")
@@ -166,8 +173,12 @@ class WikipediaTool(Tool):
             print(f"  [Tool] Searching Wikipedia for: '{query}'")
             
             # Get summary (limit to 3 sentences for brevity)
-            summary = wikipedia.summary(query, sentences=3)
-            return f"Wikipedia Summary for '{query}':\n{summary}"
+            # Get page object to access URL
+            page = wikipedia.page(query, auto_suggest=False)
+            summary = page.summary
+            # Limit summary length manually since we are using page object
+            summary = ". ".join(summary.split(". ")[:10]) + "."
+            return f"Wikipedia Summary for '{query}':\n{summary}\nSource: {page.url}"
             
         except wikipedia.exceptions.DisambiguationError as e:
             return f"Ambiguous query. Possible options: {e.options[:5]}"
@@ -189,6 +200,12 @@ class NewsTool(Tool):
             description="Get the latest news articles for a topic. Use this for current events, sports scores, or recent developments.",
             args_schema=NewsInput
         )
+        from tavily import TavilyClient
+        import os
+        api_key = os.getenv("TAVILY_API_KEY")
+        if not api_key:
+             raise ValueError("TAVILY_API_KEY not found in environment variables")
+        self.client = TavilyClient(api_key=api_key)
 
     def run(self, args: Any) -> str:
         try:
@@ -197,31 +214,26 @@ class NewsTool(Tool):
             days = validated.days
             print(f"  [Tool] Searching News for: '{query}' (Last {days} days)")
             
-            # DDGS news search
+            # Use topic="news" for dedicated news search
+            response = self.client.search(query, topic="news", days=days, max_results=5)
+            
             results = []
-            with DDGS() as ddgs:
-                # 'd' parameter controls time range (d=days)
-                # However, DDGS python lib might use different params. 
-                # Let's use the text search with a time filter if possible, or just append "news"
-                # Actually, DDGS has a news() method.
-                news_results = list(ddgs.news(keywords=query, max_results=5))
-                
-                for r in news_results:
-                    title = r.get('title', 'No Title')
-                    date = r.get('date', 'Unknown Date')
-                    source = r.get('source', 'Unknown Source')
-                    url = r.get('url', '')
-                    results.append(f"- **{title}** ({source}, {date}): {url}")
-
+            for r in response.get('results', []):
+                title = r.get('title', 'No Title')
+                content = r.get('content', 'No Content')
+                url = r.get('url', 'No URL')
+                # Tavily news results often have a 'published_date' or similar, but 'content' is key
+                results.append(f"- **{title}**\n  {content}\n  Source: {url}")
+            
             if not results:
                 return f"No news found for '{query}' in the last {days} days."
                 
-            return "Latest News:\n" + "\n".join(results)
+            return "Latest News:\n" + "\n\n".join(results)
 
         except ValidationError as e:
             return f"Argument Validation Error: {e}"
         except Exception as e:
-            return f"Error fetching news: {e}"
+            return f"Error fetching news: {str(e)}"
 
 class CalculatorInput(BaseModel):
     expression: str = Field(description="The math expression to evaluate (e.g., '25 * 4')")
@@ -282,9 +294,40 @@ class StockPriceTool(Tool):
             ticker = validated.ticker
             print(f"  [Tool] Getting Stock Price for: '{ticker}'")
             ticker = ticker.strip().upper()
-            stock = yf.Ticker(ticker)
-            price = stock.info.get('currentPrice') or stock.info.get('regularMarketPrice')
-            currency = stock.info.get('currency', 'USD')
+            # Helper to fetch price
+            def fetch_price(t):
+                try:
+                    stock = yf.Ticker(t)
+                    # fast_info is often faster/more reliable than info for price
+                    price = None
+                    if hasattr(stock, 'fast_info'):
+                        try:
+                            price = stock.fast_info.last_price
+                        except:
+                            pass
+                    
+                    if price is None:
+                         price = stock.info.get('currentPrice') or stock.info.get('regularMarketPrice')
+                    
+                    currency = stock.info.get('currency', 'USD')
+                    return price, currency
+                except Exception as e:
+                    print(f"  [Tool] Error fetching {t}: {e}")
+                    return None, None
+
+            price, currency = fetch_price(ticker)
+            
+            # If not found, try Indian suffixes
+            if not price:
+                for suffix in ['.NS', '.BO']:
+                    print(f"  [Tool] Retrying with suffix: {suffix}")
+                    p, c = fetch_price(ticker + suffix)
+                    if p:
+                        price = p
+                        currency = c
+                        ticker = ticker + suffix
+                        break
+            
             if price:
                 return f"The current price of {ticker} is {price} {currency}."
             else:

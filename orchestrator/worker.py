@@ -17,7 +17,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from shared.storage import pop_job, update_run
 from shared.tools import (
-    WebSearchTool,
+    TavilySearchTool,
     WeatherTool,
     CalculatorTool,
     TimeTool,
@@ -51,6 +51,7 @@ class AgentRouter:
         CRITICAL INSTRUCTION:
         - If the prompt is already specific and clear (e.g., "What is the weather in Tokyo?", "Stock price of Apple"), return it EXACTLY as is. Do not rewrite it.
         - Only expand if the prompt is vague (e.g., "cricket news", "latest tech trends").
+        - SAFETY CHECK: If the user asks for something harmful, illegal, or unethical (e.g., making weapons, hate speech), return a refusal message starting with "I cannot fulfill this request because...". Do NOT expand harmful queries.
         
         Do not add any conversational filler. Return ONLY the refined prompt.
 
@@ -65,7 +66,7 @@ class AgentRouter:
             print(f"  [Query Expansion] Failed: {e}")
             return prompt
 
-    def route_and_execute(self, prompt: str, max_steps: int = 10, persona: str = "You are a smart agent that solves problems using tools.") -> Dict[str, Any]:
+    def route_and_execute(self, prompt: str, max_steps: int = 20, persona: str = "You are a smart agent that solves problems using tools.") -> Dict[str, Any]:
         
         # Expand the query first
         expanded_prompt = self._expand_query(prompt)
@@ -77,6 +78,31 @@ class AgentRouter:
         tool_outputs = []
         
         for step in range(max_steps):
+            # --- Loop Detection ---
+            # Check if the exact same tool and arguments have been used recently
+            if len(tool_outputs) >= 2:
+                last_tool = tool_outputs[-1].tool_name
+                last_args = tool_outputs[-1].metadata.get('args')
+                prev_tool = tool_outputs[-2].tool_name
+                prev_args = tool_outputs[-2].metadata.get('args')
+                
+                if last_tool == prev_tool and last_args == prev_args:
+                     print(f"  [Loop Detected] Same tool call repeated: {last_tool}({last_args})")
+                     # Force the agent to try something else by appending a system message
+                     self.chat_history.append({
+                         "role": "system",
+                         "content": f"SYSTEM ALERT: You just called {last_tool} with {last_args} twice in a row. STOP doing this. Try a DIFFERENT tool or a DIFFERENT query immediately."
+                     })
+            
+            # Check if we are stuck in a search loop (many search calls with no answer)
+            search_count = sum(1 for h in tool_outputs if h.tool_name in ['web_search', 'get_news', 'wikipedia'])
+            if search_count > 5 and step > 8:
+                 self.chat_history.append({
+                     "role": "system",
+                     "content": "SYSTEM ALERT: You have performed many searches but haven't found the answer. Stop searching blindly. Analyze what you have found so far. If you are stuck, admit it or try a completely different approach."
+                 })
+            # ----------------------
+
             print(f"  [Step {step + 1}/{max_steps}] Thinking...")
             
             history_text = "\n".join([f"{msg['role']}: {msg['content']}" for msg in self.chat_history[:-1]])
@@ -98,6 +124,24 @@ class AgentRouter:
 Available Tools:
 {tool_desc_str}
 - final_answer: Use this tool when you have the final answer for the user. Arguments: {{text: The final response text}}
+
+IMPORTANT:
+- **EFFICIENCY**: If the user asks a question that you can answer directly with your internal knowledge (e.g., general facts, coding help, jokes, simple math), use the `final_answer` tool IMMEDIATELY. Do NOT use other tools unless necessary.
+- Your final answer (via the final_answer tool) should be a natural language summary, unless the user explicitly asks for a structured format (like JSON).
+- Do not just dump data; explain it to the user.
+- **Use Markdown tables** when comparing multiple items (e.g., weather in two cities, stock prices).
+- Use **bold headings** to organize long answers.
+- Keep the layout clean, professional, and easy to read.
+- When using information from tools (web_search, get_news, wikipedia), YOU MUST INCLUDE THE SOURCE LINKS/URLS in your final answer.
+- Format citations as: [Source Name](URL) or simply (URL).
+- If a tool provides a URL, make sure it ends up in the final answer so the user can validate it.
+
+SAFETY & CONDUCT:
+- You are a helpful and harmless AI assistant.
+- If the user asks for help with a harmful, illegal, or unethical activity, REFUSE the request politely but firmly.
+- Do not be preachy or judgmental. Simply state that you cannot assist with that specific request.
+- Example Refusal: "I cannot provide instructions on how to make a bomb as that is dangerous and illegal."
+- Do NOT provide "educational" or "theoretical" information for harmful topics if it could be used for harm.
 
 Conversation History:
 {history_text}
@@ -204,7 +248,7 @@ class OrchestratorWorker:
     def __init__(self) -> None:
         self.gemini_key = os.getenv("GEMINI_API_KEY", "dummy-key")
         self.tools = [
-            WebSearchTool(),
+            TavilySearchTool(),
             WeatherTool(),
             CalculatorTool(),
             TimeTool(),
