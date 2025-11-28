@@ -36,12 +36,11 @@ class AgentRouter:
         self.model = genai.GenerativeModel('gemini-2.0-flash')
         self.chat_history = []
 
-    def route_and_execute(self, prompt: str) -> Dict[str, Any]:
+    def route_and_execute(self, prompt: str, max_steps: int = 5, persona: str = "You are a smart agent that solves problems using tools.") -> Dict[str, Any]:
         print(f"--- Processing Prompt: '{prompt}' ---")
         
         self.chat_history.append({"role": "User", "content": prompt})
         
-        max_steps = 5
         scratchpad = []
         tool_outputs = []
         
@@ -51,13 +50,22 @@ class AgentRouter:
             history_text = "\n".join([f"{msg['role']}: {msg['content']}" for msg in self.chat_history[:-1]])
             scratchpad_text = "\n".join(scratchpad)
             
-            tool_descriptions = "\n".join([f"- {t.name}: {t.description}" for t in self.tools.values()])
+            # Generate tool descriptions from Pydantic schemas
+            tool_descriptions = []
+            for t in self.tools.values():
+                schema = t.args_schema.model_json_schema()
+                # Simplified schema representation for the prompt
+                args_desc = ", ".join([f"{k}: {v.get('description', '')} ({v.get('type', 'any')})" for k, v in schema.get('properties', {}).items()])
+                tool_descriptions.append(f"- {t.name}: {t.description} Arguments: {{{args_desc}}}")
+            
+            tool_desc_str = "\n".join(tool_descriptions)
             
             system_prompt = f"""
-You are a smart agent that solves problems using tools.
+{persona}
+
 Available Tools:
-{tool_descriptions}
-- final_answer: Use this tool when you have the final answer for the user. Argument: The final response text.
+{tool_desc_str}
+- final_answer: Use this tool when you have the final answer for the user. Arguments: {{text: The final response text}}
 
 Conversation History:
 {history_text}
@@ -69,57 +77,81 @@ Previous Steps (Scratchpad):
 
 Instructions:
 1. Analyze the Request, History, and Previous Steps.
-2. Decide the NEXT step: either use a tool to get more info, or provide the final answer.
-3. Return ONLY a JSON object: {{"tool": "tool_name", "args": "argument_value"}}
+2. Formulate a "Thought" about what to do next.
+3. Decide the NEXT step: either use a tool to get more info, or provide the final answer.
+4. Return ONLY a JSON object with the following structure:
+{{
+  "thought": "Your reasoning here...",
+  "tool": "tool_name",
+  "args": {{ "arg_name": "value" }}
+}}
 """
             
-            try:
-                response = self.model.generate_content(system_prompt)
-                response_text = response.text.strip()
-                
-                # Robust JSON extraction
-                start_idx = response_text.find('{')
-                end_idx = response_text.rfind('}')
-                
-                if start_idx != -1 and end_idx != -1:
-                    json_str = response_text[start_idx : end_idx + 1]
-                    decision = json.loads(json_str)
-                else:
-                    raise ValueError("No JSON object found in response")
-                
-                tool_name = decision.get("tool")
-                tool_args = decision.get("args")
-                
-                print(f"    -> Decided to use: {tool_name} (Args: {tool_args})")
-
-                if tool_name == "final_answer":
-                    self.chat_history.append({"role": "Agent", "content": tool_args})
-                    return {
-                        "answer": tool_args,
-                        "tool_outputs": tool_outputs
-                    }
-
-                if tool_name in self.tools:
-                    tool = self.tools[tool_name]
-                    result = tool.run(tool_args)
-                    print(f"    -> Output: {result}")
+            # Retry loop for model generation and parsing
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    response = self.model.generate_content(system_prompt)
+                    response_text = response.text.strip()
                     
-                    scratchpad.append(f"Action: Used {tool_name} with args '{tool_args}'")
-                    scratchpad.append(f"Observation: {result}")
+                    # Robust JSON extraction
+                    start_idx = response_text.find('{')
+                    end_idx = response_text.rfind('}')
                     
-                    tool_outputs.append(ToolOutput(
-                        tool_name=tool_name,
-                        content=str(result),
-                        metadata={"args": tool_args}
-                    ))
-                else:
-                    error_msg = f"Error: Tool '{tool_name}' not found."
-                    print(f"    -> {error_msg}")
-                    scratchpad.append(f"System Error: {error_msg}")
+                    if start_idx != -1 and end_idx != -1:
+                        json_str = response_text[start_idx : end_idx + 1]
+                        decision = json.loads(json_str)
+                    else:
+                        raise ValueError("No JSON object found in response")
+                    
+                    thought = decision.get("thought", "No thought provided.")
+                    tool_name = decision.get("tool")
+                    tool_args = decision.get("args")
+                    
+                    print(f"    [Thought] {thought}")
+                    print(f"    -> Decided to use: {tool_name} (Args: {tool_args})")
+                    
+                    break # Success, exit retry loop
+                    
+                except Exception as e:
+                    print(f"    [Attempt {attempt+1}/{max_retries}] Error parsing response: {e}")
+                    if attempt == max_retries - 1:
+                        tool_name = None # Failed after retries
+            
+            if not tool_name:
+                error_msg = "Failed to generate valid JSON action after retries."
+                print(f"    -> {error_msg}")
+                scratchpad.append(f"System Error: {error_msg}")
+                continue
 
-            except Exception as e:
-                print(f"  [Agent] Error during step: {e}")
-                scratchpad.append(f"System Error: {e}")
+            if tool_name == "final_answer":
+                # Handle final_answer args which might be a dict or string
+                answer_text = tool_args.get("text") if isinstance(tool_args, dict) else str(tool_args)
+                self.chat_history.append({"role": "Agent", "content": answer_text})
+                return {
+                    "answer": answer_text,
+                    "tool_outputs": tool_outputs
+                }
+
+            if tool_name in self.tools:
+                tool = self.tools[tool_name]
+                # Pass args directly, let the tool validate
+                result = tool.run(tool_args)
+                print(f"    -> Output: {result}")
+                
+                scratchpad.append(f"Thought: {thought}")
+                scratchpad.append(f"Action: Used {tool_name} with args '{tool_args}'")
+                scratchpad.append(f"Observation: {result}")
+                
+                tool_outputs.append(ToolOutput(
+                    tool_name=tool_name,
+                    content=str(result),
+                    metadata={"args": tool_args, "thought": thought}
+                ))
+            else:
+                error_msg = f"Error: Tool '{tool_name}' not found."
+                print(f"    -> {error_msg}")
+                scratchpad.append(f"System Error: {error_msg}")
         
         fallback_response = "I tried to solve your request but ran out of steps. Please try again."
         self.chat_history.append({"role": "Agent", "content": fallback_response})
