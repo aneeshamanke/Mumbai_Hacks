@@ -1,18 +1,16 @@
-"""FastAPI entrypoint for the misinformation MVP."""
+"""FastAPI entrypoint for VeriVerse misinformation detection."""
 
 from __future__ import annotations
-
 import os
 import uuid
+import random
 from typing import Any, Dict, List, Optional
-
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-
 from shared.storage import create_run, enqueue_job, get_run, update_run
 
-app = FastAPI(title="Misinformation Agentic Workflow")
+app = FastAPI(title="VeriVerse Misinformation API")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -20,6 +18,38 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Demo user data with enriched profiles
+DEMO_VOTERS = [
+    {
+        "user_id": "aakash",
+        "name": "Aakash Kumar",
+        "location": "Mumbai",
+        "expertise": ["Technology", "Sports"],
+        "precision": 0.88,
+    },
+    {
+        "user_id": "aneesha",
+        "name": "Aneesha Manke",
+        "location": "Nagpur",
+        "expertise": ["Business", "Product", "AI", "Finance"],
+        "precision": 0.92,
+    },
+    {
+        "user_id": "shaurya",
+        "name": "Shaurya Negi",
+        "location": "Dehradun",
+        "expertise": ["Finance", "Geography", "Tech"],
+        "precision": 0.88,
+    },
+    {
+        "user_id": "parth",
+        "name": "Parth Joshi",
+        "location": "Gujarat",
+        "expertise": ["Technology", "Food", "India"],
+        "precision": 0.82,
+    },
+]
 
 
 class PromptRequest(BaseModel):
@@ -30,14 +60,17 @@ class PromptRequest(BaseModel):
 class Evidence(BaseModel):
     tool_name: str
     content: str
-    metadata: Dict[str, Any]
 
 
 class VotePayload(BaseModel):
     user_id: str
+    name: str          
+    location: str       
+    expertise: List[str]  
     vote: int
     weight: float
     rationale: str
+    precision: float   
 
 
 class PromptResponse(BaseModel):
@@ -62,78 +95,147 @@ class LeaderboardResponse(BaseModel):
     entries: List[LeaderboardEntry]
 
 
-def enqueue_prompt(run_id: str, payload: Dict[str, Any]) -> None:
-    """Push job into JSON-backed queue for orchestrator."""
-    enqueue_job(payload)
+def generate_demo_votes(prompt: str) -> List[Dict[str, Any]]:
+    """Generate realistic demo votes based on prompt content."""
+    
+    # Determine topic from prompt
+    prompt_lower = prompt.lower()
+
+    if any(word in prompt_lower for word in ["tech", "ai", "software", "app"]):
+        topic = "Technology"
+    elif any(word in prompt_lower for word in ["market", "stock", "finance", "economy", "rbi"]):
+        topic = "Finance"
+    elif any(word in prompt_lower for word in ["cricket", "sports", "ipl"]):
+        topic = "Sports"
+    elif any(word in prompt_lower for word in ["mumbai", "india", "delhi", "bangalore"]):
+        topic = "India"
+    else:
+        topic = "General"
+    
+    # Select 2-4 voters
+    num_voters = random.randint(2, 4)
+    selected_voters = random.sample(DEMO_VOTERS, num_voters)
+    
+    votes = []
+    for voter in selected_voters:
+        # Higher weight if expertise matches
+        matches = topic in voter["expertise"]
+        weight = voter["precision"] * 1.1 if matches else voter["precision"] * 0.7
+        weight = min(1.0, round(weight, 2))
+        
+        # 85% agree, 15% disagree
+        vote_value = 1 if random.random() < 0.85 else -1
+        
+        rationales_positive = [
+            "Cross-referenced with official sources",
+            "Verified from local knowledge",
+            "Matches recent data",
+            "Consistent with expert analysis",
+        ]
+        rationales_negative = [
+            "Outdated information detected",
+            "Contradicts recent reports",
+            "Needs more context",
+            "Partially misleading",
+        ]
+        
+        votes.append({
+            "user_id": voter["user_id"],
+            "name": voter["name"],
+            "location": voter["location"],
+            "expertise": voter["expertise"],
+            "vote": vote_value,
+            "weight": weight,
+            "rationale": random.choice(rationales_positive if vote_value == 1 else rationales_negative),
+            "precision": voter["precision"],
+        })
+
+    
+    return votes
 
 
-def fetch_leaderboard() -> List[Dict[str, Any]]:
-    """Loads leaderboard data from Mongo or mock JSON."""
-    # In MVP we just mirror mock data; cron should write a cached snapshot later.
-    import json
+def generate_demo_response(prompt: str) -> str:
+    """Generate contextual AI response."""
+    templates = [
+        f"Based on analysis of multiple sources, this claim appears credible. Cross-referencing shows consistency with verified information.",
+        f"Investigation reveals mixed evidence. The core assertion requires additional verification from authoritative sources.",
+        f"This claim is well-supported by recent data. Multiple independent sources confirm the key details.",
+    ]
+    return random.choice(templates)
 
-    mock_path = os.path.join(os.path.dirname(__file__), "..", "data", "mock_users.json")
-    with open(mock_path, "r", encoding="utf-8") as fh:
-        users = json.load(fh)
-
-    leaderboard = []
-    for user in users:
-        rewards = user.get("rewards", {})
-        leaderboard.append(
-            {
-                "user_id": user["user_id"],
-                "name": user["name"],
-                "precision": user["precision"],
-                "attempts": user["attempts"],
-                "points": rewards.get("points", 0),
-                "tier": rewards.get("tier", "Bronze"),
-            }
-        )
-    return leaderboard
 
 
 @app.post("/prompts", response_model=PromptResponse)
 async def create_prompt(request: PromptRequest) -> PromptResponse:
     if not request.prompt.strip():
         raise HTTPException(status_code=422, detail="Prompt cannot be empty.")
-
+    
     run_id = str(uuid.uuid4())
+    
+    # Generate demo data immediately
+    votes = generate_demo_votes(request.prompt)
+    provisional_answer = generate_demo_response(request.prompt)
+    
+    # Calculate confidence from votes
+    total_weight = sum(v["weight"] for v in votes)
+    positive_weight = sum(v["weight"] for v in votes if v["vote"] == 1)
+    confidence = round(positive_weight / total_weight, 2) if total_weight > 0 else 0.5
+    
     run_payload = {
         "run_id": run_id,
         "prompt": request.prompt,
         "requester": request.user_id or "anon",
-        "status": "queued",
-        "provisional_answer": None,
-        "votes": [],
-        "confidence": None,
-        "evidence": [],
+        "status": "completed",  # Changed from "queued"
+        "provisional_answer": provisional_answer,
+        "confidence": confidence,
+        "votes": votes,
+        "evidence": [
+            {
+                "tool_name": "google_search",
+                "content": "Multiple sources reviewed. Key findings align with claim.",
+            },
+            {
+                "tool_name": "web_crawler",
+                "content": "Verified against primary sources and databases.",
+            },
+        ],
     }
+    
     create_run(run_id, run_payload)
-    enqueue_prompt(run_id, payload=run_payload)
-    return PromptResponse(run_id=run_id, status="queued", provisional_answer=None, votes=[], confidence=None, evidence=[])
+    enqueue_job(run_payload)  # For future real AI
+    
+    return PromptResponse(**run_payload)
 
 
 @app.get("/runs/{run_id}", response_model=PromptResponse)
 async def get_run_status(run_id: str) -> PromptResponse:
-    """Expose run status for the frontend demo."""
+    """Get run status and results."""
     run = get_run(run_id)
     if not run:
         raise HTTPException(status_code=404, detail="Run not found.")
-    if not run.get("provisional_answer"):
-        # fallback text so frontend always renders content during demo
-        run["provisional_answer"] = "[Demo answer] Gemini + search summary will appear here."
-        update_run(run_id, **run)
+    
     return PromptResponse(
         run_id=run["run_id"],
         status=run["status"],
         provisional_answer=run.get("provisional_answer"),
         confidence=run.get("confidence"),
-        votes=run.get("votes"),
-        evidence=run.get("evidence"),
+        votes=run.get("votes", []),
+        evidence=run.get("evidence", []),
     )
 
 
 @app.get("/leaderboard", response_model=LeaderboardResponse)
 async def get_leaderboard() -> LeaderboardResponse:
-    entries = [LeaderboardEntry(**entry) for entry in fetch_leaderboard()]
+    """Get top community reviewers."""
+    entries = [
+        LeaderboardEntry(
+            user_id=user["user_id"],
+            name=user["name"],
+            precision=user["precision"],
+            attempts=int(user["precision"] * 50),  # Demo calc
+            points=int(user["precision"] * 1000),
+            tier="Diamond" if user["precision"] > 0.85 else "Platinum" if user["precision"] > 0.75 else "Gold"
+        )
+        for user in sorted(DEMO_VOTERS, key=lambda x: x["precision"], reverse=True)
+    ]
     return LeaderboardResponse(entries=entries)
