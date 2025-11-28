@@ -56,9 +56,16 @@ class WebSearchTool(Tool):
         try:
             validated = self.validate_args(args)
             query = validated.query
+            kwargs = dict(
+                query=query,
+                max_results=3,
+                safesearch="off",
+                timelimit="m"
+
+            )
             print(f"  [Tool] Running Web Search for: '{query}'")
             with DDGS() as ddgs:
-                results = list(ddgs.text(query, max_results=3))
+                results = list(ddgs.text(query, max_results=3, **kwargs))
                 if not results:
                     return "No results found."
                 
