@@ -1,9 +1,11 @@
 import datetime
 import requests
-import yfinance as yf
-from ddgs import DDGS
+import json
+import wikipedia
+from duckduckgo_search import DDGS
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Type
 from pydantic import BaseModel, Field, ValidationError
-from typing import Type, Any, Dict
 
 class Tool:
     def __init__(self, name: str, description: str, args_schema: Type[BaseModel]):
@@ -85,17 +87,134 @@ class WeatherTool(Tool):
             validated = self.validate_args(args)
             city = validated.city
             print(f"  [Tool] Getting Weather for: '{city}'")
-            city = city.strip("? ")
-            url = f"https://wttr.in/{city}?format=%C+%t+%w"
-            response = requests.get(url)
-            if response.status_code == 200:
-                return f"Weather in {city}: {response.text.strip()}"
-            else:
-                return f"Could not get weather for {city}."
+            
+            # 1. Geocoding
+            geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={city}&count=1&language=en&format=json"
+            geo_response = requests.get(geo_url)
+            if geo_response.status_code != 200:
+                 return f"Error finding location for {city}."
+            
+            geo_data = geo_response.json()
+            if not geo_data.get("results"):
+                return f"Could not find location: {city}"
+                
+            location = geo_data["results"][0]
+            lat = location["latitude"]
+            lon = location["longitude"]
+            name = location["name"]
+            country = location.get("country", "")
+
+            # 2. Weather Data
+            weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m&wind_speed_unit=kmh"
+            weather_response = requests.get(weather_url)
+            
+            if weather_response.status_code != 200:
+                return f"Error fetching weather data for {name}."
+                
+            weather_data = weather_response.json()
+            current = weather_data.get("current", {})
+            temp = current.get("temperature_2m")
+            humidity = current.get("relative_humidity_2m")
+            wind = current.get("wind_speed_10m")
+            code = current.get("weather_code")
+            
+            # WMO Weather interpretation codes (https://open-meteo.com/en/docs)
+            weather_codes = {
+                0: "Clear sky",
+                1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast",
+                45: "Fog", 48: "Depositing rime fog",
+                51: "Light drizzle", 53: "Moderate drizzle", 55: "Dense drizzle",
+                61: "Slight rain", 63: "Moderate rain", 65: "Heavy rain",
+                71: "Slight snow fall", 73: "Moderate snow fall", 75: "Heavy snow fall",
+                77: "Snow grains",
+                80: "Slight rain showers", 81: "Moderate rain showers", 82: "Violent rain showers",
+                85: "Slight snow showers", 86: "Heavy snow showers",
+                95: "Thunderstorm",
+                96: "Thunderstorm with slight hail", 99: "Thunderstorm with heavy hail"
+            }
+            condition = weather_codes.get(code, "Unknown")
+            
+            return f"Weather in {name}, {country}: {condition}, Temperature: {temp}°C, Humidity: {humidity}%, Wind Speed: {wind} km/h"
+
         except ValidationError as e:
             return f"Argument Validation Error: {e}"
         except Exception as e:
             return f"Error getting weather: {e}"
+
+class WikipediaInput(BaseModel):
+    query: str = Field(description="The topic to search for on Wikipedia")
+
+class WikipediaTool(Tool):
+    def __init__(self):
+        super().__init__(
+            name="wikipedia",
+            description="Get a concise summary of a topic from Wikipedia. Use this for factual questions about people, places, history, or concepts.",
+            args_schema=WikipediaInput
+        )
+
+    def run(self, args: Any) -> str:
+        try:
+            validated = self.validate_args(args)
+            query = validated.query
+            print(f"  [Tool] Searching Wikipedia for: '{query}'")
+            
+            # Get summary (limit to 3 sentences for brevity)
+            summary = wikipedia.summary(query, sentences=3)
+            return f"Wikipedia Summary for '{query}':\n{summary}"
+            
+        except wikipedia.exceptions.DisambiguationError as e:
+            return f"Ambiguous query. Possible options: {e.options[:5]}"
+        except wikipedia.exceptions.PageError:
+            return f"Page not found for '{query}'."
+        except ValidationError as e:
+            return f"Argument Validation Error: {e}"
+        except Exception as e:
+            return f"Error searching Wikipedia: {e}"
+
+class NewsInput(BaseModel):
+    query: str = Field(description="The news topic to search for")
+    days: int = Field(default=3, description="Number of past days to search (default: 3)")
+
+class NewsTool(Tool):
+    def __init__(self):
+        super().__init__(
+            name="get_news",
+            description="Get the latest news articles for a topic. Use this for current events, sports scores, or recent developments.",
+            args_schema=NewsInput
+        )
+
+    def run(self, args: Any) -> str:
+        try:
+            validated = self.validate_args(args)
+            query = validated.query
+            days = validated.days
+            print(f"  [Tool] Searching News for: '{query}' (Last {days} days)")
+            
+            # DDGS news search
+            results = []
+            with DDGS() as ddgs:
+                # 'd' parameter controls time range (d=days)
+                # However, DDGS python lib might use different params. 
+                # Let's use the text search with a time filter if possible, or just append "news"
+                # Actually, DDGS has a news() method.
+                news_results = list(ddgs.news(keywords=query, max_results=5))
+                
+                for r in news_results:
+                    title = r.get('title', 'No Title')
+                    date = r.get('date', 'Unknown Date')
+                    source = r.get('source', 'Unknown Source')
+                    url = r.get('url', '')
+                    results.append(f"- **{title}** ({source}, {date}): {url}")
+
+            if not results:
+                return f"No news found for '{query}' in the last {days} days."
+                
+            return "Latest News:\n" + "\n".join(results)
+
+        except ValidationError as e:
+            return f"Argument Validation Error: {e}"
+        except Exception as e:
+            return f"Error fetching news: {e}"
 
 class CalculatorInput(BaseModel):
     expression: str = Field(description="The math expression to evaluate (e.g., '25 * 4')")

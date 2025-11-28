@@ -10,6 +10,11 @@ from typing import Any, Dict
 
 import google.generativeai as genai
 from dotenv import load_dotenv
+
+# Add project root to path
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 from shared.storage import pop_job, update_run
 from shared.tools import (
     WebSearchTool,
@@ -17,6 +22,8 @@ from shared.tools import (
     CalculatorTool,
     TimeTool,
     StockPriceTool,
+    WikipediaTool,
+    NewsTool
 )
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "../config/.env"))
@@ -33,13 +40,38 @@ class AgentRouter:
     def __init__(self, tools, api_key):
         self.tools = {t.name: t for t in tools}
         genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel('gemini-2.0-flash')
+        self.model = genai.GenerativeModel('gemini-2.5-flash')
         self.chat_history = []
 
-    def route_and_execute(self, prompt: str, max_steps: int = 5, persona: str = "You are a smart agent that solves problems using tools.") -> Dict[str, Any]:
-        print(f"--- Processing Prompt: '{prompt}' ---")
+    def _expand_query(self, prompt: str) -> str:
+        expansion_prompt = f"""
+        You are an expert at refining user queries for search engines and tools.
+        Rewrite the following user prompt to be more specific, detailed, and optimized for an autonomous agent to solve.
         
-        self.chat_history.append({"role": "User", "content": prompt})
+        CRITICAL INSTRUCTION:
+        - If the prompt is already specific and clear (e.g., "What is the weather in Tokyo?", "Stock price of Apple"), return it EXACTLY as is. Do not rewrite it.
+        - Only expand if the prompt is vague (e.g., "cricket news", "latest tech trends").
+        
+        Do not add any conversational filler. Return ONLY the refined prompt.
+
+        User Prompt: {prompt}
+        """
+        try:
+            response = self.model.generate_content(expansion_prompt)
+            expanded_prompt = response.text.strip()
+            print(f"  [Query Expansion] Original: '{prompt}' -> Expanded: '{expanded_prompt}'")
+            return expanded_prompt
+        except Exception as e:
+            print(f"  [Query Expansion] Failed: {e}")
+            return prompt
+
+    def route_and_execute(self, prompt: str, max_steps: int = 10, persona: str = "You are a smart agent that solves problems using tools.") -> Dict[str, Any]:
+        
+        # Expand the query first
+        expanded_prompt = self._expand_query(prompt)
+        print(f"--- Processing Prompt: '{expanded_prompt}' ---")
+        
+        self.chat_history.append({"role": "User", "content": expanded_prompt})
         
         scratchpad = []
         tool_outputs = []
@@ -70,7 +102,7 @@ Available Tools:
 Conversation History:
 {history_text}
 
-Current User Request: {prompt}
+Current User Request: {expanded_prompt}
 
 Previous Steps (Scratchpad):
 {scratchpad_text}
@@ -85,6 +117,13 @@ Instructions:
   "tool": "tool_name",
   "args": {{ "arg_name": "value" }}
 }}
+
+IMPORTANT:
+- Your final answer (via the final_answer tool) should be a natural language summary, unless the user explicitly asks for a structured format (like JSON).
+- Do not just dump data; explain it to the user.
+- **Use Markdown tables** when comparing multiple items (e.g., weather in two cities, stock prices).
+- Use **bold headings** to organize long answers.
+- Keep the layout clean, professional, and easy to read.
 """
             
             # Retry loop for model generation and parsing
@@ -169,9 +208,12 @@ class OrchestratorWorker:
             WeatherTool(),
             CalculatorTool(),
             TimeTool(),
-            StockPriceTool()
+            StockPriceTool(),
+            WikipediaTool(),
+            NewsTool()
         ]
         self.agent = AgentRouter(self.tools, self.gemini_key)
+        self.model = genai.GenerativeModel('gemini-2.5-flash')
 
     def run(self, job: Dict[str, Any]) -> Dict[str, Any]:
         """Main entrypoint for a prompt job."""
