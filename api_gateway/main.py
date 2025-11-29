@@ -172,23 +172,16 @@ async def create_prompt(request: PromptRequest) -> PromptResponse:
     
     run_id = str(uuid.uuid4())
     
-    # Generate demo data immediately
-    votes = generate_demo_votes(request.prompt)
     provisional_answer = generate_demo_response(request.prompt)
-    
-    # Calculate confidence from votes
-    total_weight = sum(v["weight"] for v in votes)
-    positive_weight = sum(v["weight"] for v in votes if v["vote"] == 1)
-    confidence = round(positive_weight / total_weight, 2) if total_weight > 0 else 0.5
     
     run_payload = {
         "run_id": run_id,
         "prompt": request.prompt,
         "requester": request.user_id or "anon",
-        "status": "completed",  # Changed from "queued"
+        "status": "completed",
         "provisional_answer": provisional_answer,
-        "confidence": confidence,
-        "votes": votes,
+        "confidence": None,
+        "votes": [],
         "evidence": [
             {
                 "tool_name": "google_search",
@@ -202,7 +195,7 @@ async def create_prompt(request: PromptRequest) -> PromptResponse:
     }
     
     create_run(run_id, run_payload)
-    enqueue_job(run_payload)  # For future real AI
+    enqueue_job(run_payload)
     
     return PromptResponse(**run_payload)
 
