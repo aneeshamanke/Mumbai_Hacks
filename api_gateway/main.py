@@ -220,6 +220,11 @@ async def create_prompt(request: PromptRequest) -> PromptResponse:
         result = worker.run(job)
         final_answer = result["answer"]
         tool_outputs = result["tools"]
+        
+        # Clean up final_answer to remove "Sources:" block
+        import re
+        source_pattern = r"\n+(\*\*|#+\s)?(Sources|References|Citations).*?(\Z)"
+        final_answer = re.sub(source_pattern, "", final_answer, flags=re.DOTALL | re.IGNORECASE).strip()
     except Exception as e:
         print(f"Error running agent: {e}")
         final_answer = f"Error processing request: {str(e)}"
