@@ -95,8 +95,13 @@ class LeaderboardResponse(BaseModel):
     entries: List[LeaderboardEntry]
 
 
-def generate_demo_votes(prompt: str) -> List[Dict[str, Any]]:
-    """Generate realistic demo votes based on prompt content."""
+def generate_demo_votes(prompt: str, author_user_id: str | None = None) -> List[Dict[str, Any]]:
+    """Generate realistic demo votes based on prompt content.
+    
+    Args:
+        prompt: The claim text to analyze for topic matching
+        author_user_id: The user_id of the claim author (excluded from voters)
+    """
     
     # Determine topic from prompt
     prompt_lower = prompt.lower()
@@ -112,9 +117,15 @@ def generate_demo_votes(prompt: str) -> List[Dict[str, Any]]:
     else:
         topic = "General"
     
-    # Select 2-4 voters
-    num_voters = random.randint(2, 4)
-    selected_voters = random.sample(DEMO_VOTERS, num_voters)
+    # Filter out the claim author from eligible voters
+    eligible_voters = [v for v in DEMO_VOTERS if v["user_id"] != author_user_id]
+    
+    if not eligible_voters:
+        return []
+    
+    # Select 2-4 voters (or fewer if not enough eligible)
+    num_voters = min(random.randint(2, 4), len(eligible_voters))
+    selected_voters = random.sample(eligible_voters, num_voters)
     
     votes = []
     for voter in selected_voters:
