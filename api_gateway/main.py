@@ -68,9 +68,7 @@ class Evidence(BaseModel):
     content: str
 
 
-class Citation(BaseModel):
-    title: str
-    url: str
+
 
 
 class Step(BaseModel):
@@ -99,7 +97,7 @@ class PromptResponse(BaseModel):
     confidence: Optional[float] = None
     votes: Optional[List[VotePayload]] = None
     evidence: Optional[List[Evidence]] = None
-    citations: Optional[List[Citation]] = None
+    citations: Optional[List[str]] = None
     steps: Optional[List[Step]] = None
 
 
@@ -248,10 +246,9 @@ async def create_prompt(request: PromptRequest) -> PromptResponse:
         if output.get("tool_name") in ["web_search", "get_news"]:
             matches = re.finditer(citation_pattern, content, re.DOTALL)
             for match in matches:
-                citations.append({
-                    "title": match.group(1).strip(),
-                    "url": match.group(2).strip()
-                })
+                url = match.group(2).strip()
+                if url not in citations:
+                    citations.append(url)
 
     # Extract Steps
     steps = []
