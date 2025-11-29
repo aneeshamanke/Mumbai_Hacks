@@ -63,7 +63,7 @@ class TavilySearchTool(Tool):
         try:
             validated = self.validate_args(args)
             query = validated.query
-            print(f"  [Tool] Running Tavily Search for: '{query}'")
+            print(f"  [Tool] Running Web Search for: '{query}'")
             
             # Use search_depth="advanced" for better results
             response = self.client.search(query, search_depth="advanced", max_results=5)

@@ -66,6 +66,38 @@ class AgentRouter:
             print(f"  [Query Expansion] Failed: {e}")
             return prompt
 
+    def _calculate_confidence(self, prompt: str, answer: str, tool_outputs: list) -> float:
+        """Calculate confidence score (0.0 - 1.0) based on evidence."""
+        evidence_text = "\n".join([f"- {t.tool_name}: {t.content[:500]}..." for t in tool_outputs])
+        
+        eval_prompt = f"""
+        Evaluate the confidence of the following answer based on the provided evidence.
+        
+        User Question: {prompt}
+        
+        Agent Answer: {answer}
+        
+        Evidence Found:
+        {evidence_text}
+        
+        Task:
+        - Rate confidence from 0.0 to 1.0.
+        - **Be generous**: If the answer is supported by at least one reliable source (news, wikipedia), score it **above 0.8**.
+        - If multiple sources confirm the key facts, score it **0.9 - 1.0**.
+        - Only give a low score (< 0.5) if the evidence directly contradicts the answer or if NO evidence was found.
+        - Minor missing details should not heavily penalize the score.
+        
+        Return ONLY the float number (e.g., 0.95). Do not add any text.
+        """
+        try:
+            response = self.model.generate_content(eval_prompt)
+            score = float(response.text.strip())
+            print(f"  [Confidence] Calculated Score: {score}")
+            return max(0.0, min(1.0, score))
+        except Exception as e:
+            print(f"  [Confidence] Calculation Failed: {e}")
+            return 0.5 # Default fallback
+
     def route_and_execute(self, prompt: str, max_steps: int = 20, persona: str = "You are a smart agent that solves problems using tools.") -> Dict[str, Any]:
         
         # Expand the query first
@@ -208,12 +240,16 @@ IMPORTANT:
                 continue
 
             if tool_name == "final_answer":
-                # Handle final_answer args which might be a dict or string
                 answer_text = tool_args.get("text") if isinstance(tool_args, dict) else str(tool_args)
                 self.chat_history.append({"role": "Agent", "content": answer_text})
+                
+                # Calculate confidence
+                confidence = self._calculate_confidence(prompt, answer_text, tool_outputs)
+                
                 return {
                     "answer": answer_text,
-                    "tool_outputs": tool_outputs
+                    "tool_outputs": tool_outputs,
+                    "confidence": confidence
                 }
 
             if tool_name in self.tools:
@@ -240,7 +276,8 @@ IMPORTANT:
         self.chat_history.append({"role": "Agent", "content": fallback_response})
         return {
             "answer": fallback_response,
-            "tool_outputs": tool_outputs
+            "tool_outputs": tool_outputs,
+            "confidence": 0.0
         }
 
 
@@ -269,12 +306,14 @@ class OrchestratorWorker:
         agent_result = self.agent.route_and_execute(prompt)
         final_answer = agent_result["answer"]
         tool_outputs = agent_result["tool_outputs"]
+        confidence = agent_result.get("confidence", 0.0)
 
         result = {
             "run_id": run_id,
             "prompt": prompt,
             "tools": [output.__dict__ for output in tool_outputs],
             "answer": final_answer,
+            "confidence": confidence,
             "latency_ms": job.get("latency_ms", 0),
         }
         self._persist_run(result)
@@ -282,6 +321,7 @@ class OrchestratorWorker:
             run_id,
             status="awaiting_votes",
             provisional_answer=final_answer,
+            confidence=confidence,
             evidence=[output.__dict__ for output in tool_outputs],
         )
         return result

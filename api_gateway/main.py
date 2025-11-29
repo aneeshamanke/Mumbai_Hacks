@@ -8,7 +8,13 @@ from typing import Any, Dict, List, Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from shared.storage import create_run, enqueue_job, get_run, update_run
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv(os.path.join(os.path.dirname(__file__), "../config/.env"))
 
 app = FastAPI(title="VeriVerse Misinformation API")
 app.add_middleware(
@@ -54,12 +60,25 @@ DEMO_VOTERS = [
 
 class PromptRequest(BaseModel):
     prompt: str = Field(..., min_length=4, max_length=2000)
-    user_id: str | None = None
+    user_id: Optional[str] = None
 
 
 class Evidence(BaseModel):
     tool_name: str
     content: str
+
+
+class Citation(BaseModel):
+    title: str
+    url: str
+
+
+class Step(BaseModel):
+    step: int
+    thought: str
+    tool: str
+    tool_input: str
+    tool_output: str
 
 
 class VotePayload(BaseModel):
@@ -76,10 +95,12 @@ class VotePayload(BaseModel):
 class PromptResponse(BaseModel):
     run_id: str
     status: str
-    provisional_answer: str | None = None
+    provisional_answer: Optional[str] = None
     confidence: Optional[float] = None
-    votes: List[VotePayload] | None = None
-    evidence: List[Evidence] | None = None
+    votes: Optional[List[VotePayload]] = None
+    evidence: Optional[List[Evidence]] = None
+    citations: Optional[List[Citation]] = None
+    steps: Optional[List[Step]] = None
 
 
 class LeaderboardEntry(BaseModel):
@@ -183,30 +204,77 @@ async def create_prompt(request: PromptRequest) -> PromptResponse:
     
     run_id = str(uuid.uuid4())
     
-    provisional_answer = generate_demo_response(request.prompt)
+    # Initialize Worker
+    from orchestrator.worker import OrchestratorWorker
+    worker = OrchestratorWorker()
     
+    # Create Job Payload
+    job = {
+        "run_id": run_id,
+        "prompt": request.prompt,
+    }
+    
+    # Run Agent Synchronously
+    print(f"Processing request {run_id}: {request.prompt}")
+    try:
+        result = worker.run(job)
+        final_answer = result["answer"]
+        tool_outputs = result["tools"]
+    except Exception as e:
+        print(f"Error running agent: {e}")
+        final_answer = f"Error processing request: {str(e)}"
+        tool_outputs = []
+
+    # Map Tool Outputs to Evidence Format
+    evidence = []
+    for output in tool_outputs:
+        evidence.append({
+            "tool_name": output.get("tool_name", "unknown"),
+            "content": output.get("content", "")
+        })
+
+    # Extract Citations
+    import re
+    citations = []
+    citation_pattern = r"- \*\*(.*?)\*\*\s+.*?\s+Source: (.*?)(?=\n\n|\Z)"
+    
+    for output in tool_outputs:
+        content = output.get("content", "")
+        if output.get("tool_name") in ["web_search", "get_news"]:
+            matches = re.finditer(citation_pattern, content, re.DOTALL)
+            for match in matches:
+                citations.append({
+                    "title": match.group(1).strip(),
+                    "url": match.group(2).strip()
+                })
+
+    # Extract Steps
+    steps = []
+    for i, output in enumerate(tool_outputs):
+        metadata = output.get("metadata", {})
+        steps.append({
+            "step": i + 1,
+            "thought": metadata.get("thought", "No thought provided."),
+            "tool": output.get("tool_name", "unknown"),
+            "tool_input": str(metadata.get("args", {})),
+            "tool_output": output.get("content", "")[:500] + "..." if len(output.get("content", "")) > 500 else output.get("content", "")
+        })
+
     run_payload = {
         "run_id": run_id,
         "prompt": request.prompt,
         "requester": request.user_id or "anon",
         "status": "completed",
-        "provisional_answer": provisional_answer,
-        "confidence": None,
-        "votes": [],
-        "evidence": [
-            {
-                "tool_name": "google_search",
-                "content": "Multiple sources reviewed. Key findings align with claim.",
-            },
-            {
-                "tool_name": "web_crawler",
-                "content": "Verified against primary sources and databases.",
-            },
-        ],
+        "provisional_answer": final_answer,
+        "confidence": result.get("confidence", 0.0),
+        "votes": [], # Votes will be added later by the community
+        "evidence": evidence,
+        "citations": citations,
+        "steps": steps,
     }
     
+    # Persist run (optional, as worker already persists)
     create_run(run_id, run_payload)
-    enqueue_job(run_payload)
     
     return PromptResponse(**run_payload)
 
@@ -218,13 +286,29 @@ async def get_run_status(run_id: str) -> PromptResponse:
     if not run:
         raise HTTPException(status_code=404, detail="Run not found.")
     
+    # Ensure evidence is correctly formatted
+    evidence_data = run.get("evidence", [])
+    formatted_evidence = []
+    if evidence_data:
+        for item in evidence_data:
+            if isinstance(item, dict):
+                formatted_evidence.append(Evidence(
+                    tool_name=item.get("tool_name", "unknown"),
+                    content=item.get("content", "")
+                ))
+            else:
+                # Handle legacy format if any
+                formatted_evidence.append(Evidence(tool_name="unknown", content=str(item)))
+
     return PromptResponse(
         run_id=run["run_id"],
         status=run["status"],
         provisional_answer=run.get("provisional_answer"),
         confidence=run.get("confidence"),
         votes=run.get("votes", []),
-        evidence=run.get("evidence", []),
+        evidence=formatted_evidence,
+        citations=run.get("citations", []),
+        steps=run.get("steps", []),
     )
 
 
@@ -243,3 +327,7 @@ async def get_leaderboard() -> LeaderboardResponse:
         for user in sorted(DEMO_VOTERS, key=lambda x: x["precision"], reverse=True)
     ]
     return LeaderboardResponse(entries=entries)
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
