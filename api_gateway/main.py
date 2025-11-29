@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 import uuid
 import random
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -75,7 +75,7 @@ class Step(BaseModel):
     step: int
     thought: str
     tool: str
-    tool_input: str
+    tool_input: Union[Dict[str, Any], str]
     tool_output: str
 
 
@@ -236,10 +236,12 @@ async def create_prompt(request: PromptRequest) -> PromptResponse:
             "content": output.get("content", "")
         })
 
-    # Extract Citations
+    # Extract Sources (URLs only)
     import re
-    citations = []
-    citation_pattern = r"- \*\*(.*?)\*\*\s+.*?\s+Source: (.*?)(?=\n\n|\Z)"
+    sources = []
+    # Old Markdown: r"- \*\*(.*?)\*\*\s+.*?\s+Source: (.*?)(?=\n\n|\Z)"
+    # New Plain Text: Title: ...\nContent: ...\nSource: ...
+    citation_pattern = r"Title: (.*?)\nContent: .*?\nSource: (.*?)(?=\n\n|\Z)"
     
     for output in tool_outputs:
         content = output.get("content", "")
@@ -247,8 +249,8 @@ async def create_prompt(request: PromptRequest) -> PromptResponse:
             matches = re.finditer(citation_pattern, content, re.DOTALL)
             for match in matches:
                 url = match.group(2).strip()
-                if url not in citations:
-                    citations.append(url)
+                if url not in sources:
+                    sources.append(url)
 
     # Extract Steps
     steps = []
@@ -258,7 +260,7 @@ async def create_prompt(request: PromptRequest) -> PromptResponse:
             "step": i + 1,
             "thought": metadata.get("thought", "No thought provided."),
             "tool": output.get("tool_name", "unknown"),
-            "tool_input": str(metadata.get("args", {})),
+            "tool_input": metadata.get("args", {}),
             "tool_output": output.get("content", "")[:500] + "..." if len(output.get("content", "")) > 500 else output.get("content", "")
         })
 
@@ -271,7 +273,7 @@ async def create_prompt(request: PromptRequest) -> PromptResponse:
         "confidence": result.get("confidence", 0.0),
         "votes": [], # Votes will be added later by the community
         "evidence": evidence,
-        "citations": citations,
+        "sources": sources,
         "steps": steps,
     }
     

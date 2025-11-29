@@ -159,6 +159,10 @@ Available Tools:
 
 IMPORTANT:
 - **EFFICIENCY**: If the user asks a question that you can answer directly with your internal knowledge (e.g., general facts, coding help, jokes, simple math), use the `final_answer` tool IMMEDIATELY. Do NOT use other tools unless necessary.
+- **SIMPLE FACTS**: For simple factual questions (e.g., "Who is the CEO of Apple?", "Capital of France"), prefer the `wikipedia` tool over `web_search`. It is faster and more concise.
+- **INTERNAL KNOWLEDGE**: For philosophical, general knowledge, or conversational queries (e.g., "Meaning of life", "Tell me a joke", "What is 2+2?"), use `final_answer` IMMEDIATELY. Do NOT use tools.
+- **CONCISENESS**: If the user asks a simple question, provide a **concise answer (1-2 sentences)**. Do not write a long essay unless asked.
+- **DIRECTNESS**: Start the answer immediately. Do not say "Here is the answer", "Based on my search", or "I found that". Just state the answer.
 - Your final answer (via the final_answer tool) should be a natural language summary, unless the user explicitly asks for a structured format (like JSON).
 - Do not just dump data; explain it to the user.
 - **Use Markdown tables** when comparing multiple items (e.g., weather in two cities, stock prices).
@@ -230,6 +234,37 @@ IMPORTANT:
                     
                 except Exception as e:
                     print(f"    [Attempt {attempt+1}/{max_retries}] Error parsing response: {e}")
+                    
+                    # Try to repair JSON with LLM
+                    if attempt < max_retries - 1:
+                        try:
+                            repair_prompt = f"""
+                            The following text contains a JSON object but it is malformed or hard to extract.
+                            Please output ONLY the valid JSON object. Do not add any other text.
+                            
+                            Text:
+                            {response_text}
+                            """
+                            repair_response = self.model.generate_content(repair_prompt)
+                            repaired_text = repair_response.text.strip()
+                            
+                            # Try to extract again from repaired text
+                            start_idx = repaired_text.find('{')
+                            end_idx = repaired_text.rfind('}')
+                            if start_idx != -1 and end_idx != -1:
+                                json_str = repaired_text[start_idx : end_idx + 1]
+                                decision = json.loads(json_str)
+                                
+                                thought = decision.get("thought", "No thought provided.")
+                                tool_name = decision.get("tool")
+                                tool_args = decision.get("args")
+                                print(f"    [JSON Repair] Successfully repaired JSON.")
+                                print(f"    [Thought] {thought}")
+                                print(f"    -> Decided to use: {tool_name} (Args: {tool_args})")
+                                break
+                        except Exception as repair_error:
+                             print(f"    [JSON Repair] Failed: {repair_error}")
+
                     if attempt == max_retries - 1:
                         tool_name = None # Failed after retries
             

@@ -59,6 +59,35 @@ class TavilySearchTool(Tool):
              raise ValueError("TAVILY_API_KEY not found in environment variables")
         self.client = TavilyClient(api_key=api_key)
 
+    def strip_markdown(self, text: str) -> str:
+        import re
+        import unicodedata
+        
+        # Normalize Unicode (NFKC) to fix non-breaking spaces, curly quotes, etc.
+        text = unicodedata.normalize('NFKC', text)
+        
+        # Manually replace smart quotes and other common chars that NFKC might miss for ASCII simplification
+        replacements = {
+            '\u2018': "'", '\u2019': "'", # Smart single quotes
+            '\u201c': '"', '\u201d': '"', # Smart double quotes
+            '\u2013': "-", '\u2014': "-"  # Dashes
+        }
+        for char, replacement in replacements.items():
+            text = text.replace(char, replacement)
+        
+        # Remove headers
+        text = re.sub(r"^#+\s*", "", text, flags=re.MULTILINE)
+        # Remove bold/italic
+        text = re.sub(r"(\*\*|__)(.*?)\1", r"\2", text)
+        text = re.sub(r"(\*|_)(.*?)\1", r"\2", text)
+        # Remove links [text](url) -> text
+        text = re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"\1", text)
+        # Remove images ![alt](url) -> [Image: alt]
+        text = re.sub(r"!\[([^\]]*)\]\([^\)]+\)", r"[Image: \1]", text)
+        # Remove blockquotes
+        text = re.sub(r"^>\s*", "", text, flags=re.MULTILINE)
+        return text.strip()
+
     def run(self, args: Any) -> str:
         try:
             validated = self.validate_args(args)
@@ -72,8 +101,10 @@ class TavilySearchTool(Tool):
             for r in response.get('results', []):
                 title = r.get('title', 'No Title')
                 content = r.get('content', 'No Content')
+                # Strip Markdown from content
+                content = self.strip_markdown(content)
                 url = r.get('url', 'No URL')
-                results.append(f"- **{title}**\n  {content}\n  Source: {url}")
+                results.append(f"Title: {title}\nContent: {content}\nSource: {url}")
             
             if not results:
                 return "No relevant results found."
@@ -177,7 +208,7 @@ class WikipediaTool(Tool):
             page = wikipedia.page(query, auto_suggest=False)
             summary = page.summary
             # Limit summary length manually since we are using page object
-            summary = ". ".join(summary.split(". ")[:10]) + "."
+            summary = ". ".join(summary.split(". ")[:20]) + "."
             return f"Wikipedia Summary for '{query}':\n{summary}\nSource: {page.url}"
             
         except wikipedia.exceptions.DisambiguationError as e:
@@ -221,9 +252,32 @@ class NewsTool(Tool):
             for r in response.get('results', []):
                 title = r.get('title', 'No Title')
                 content = r.get('content', 'No Content')
+                
+                # Strip Markdown from content
+                import re
+                import unicodedata
+                
+                # Normalize Unicode (NFKC)
+                content = unicodedata.normalize('NFKC', content)
+                
+                # Manually replace smart quotes and other common chars
+                replacements = {
+                    '\u2018': "'", '\u2019': "'", # Smart single quotes
+                    '\u201c': '"', '\u201d': '"', # Smart double quotes
+                    '\u2013': "-", '\u2014': "-"  # Dashes
+                }
+                for char, replacement in replacements.items():
+                    content = content.replace(char, replacement)
+                
+                content = re.sub(r"^#+\s*", "", content, flags=re.MULTILINE) # Headers
+                content = re.sub(r"(\*\*|__)(.*?)\1", r"\2", content) # Bold
+                content = re.sub(r"(\*|_)(.*?)\1", r"\2", content) # Italic
+                content = re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"\1", content) # Links
+                content = content.strip()
+                
                 url = r.get('url', 'No URL')
                 # Tavily news results often have a 'published_date' or similar, but 'content' is key
-                results.append(f"- **{title}**\n  {content}\n  Source: {url}")
+                results.append(f"Title: {title}\nContent: {content}\nSource: {url}")
             
             if not results:
                 return f"No news found for '{query}' in the last {days} days."
@@ -274,7 +328,7 @@ class TimeTool(Tool):
 
     def run(self, args: Any = None) -> str:
         print(f"  [Tool] Getting Current Time")
-        now = datetime.datetime.now()
+        now = datetime.now()
         return f"Current Time: {now.strftime('%Y-%m-%d %H:%M:%S')}"
 
 class StockPriceInput(BaseModel):
