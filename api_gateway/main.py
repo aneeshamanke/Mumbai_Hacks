@@ -99,6 +99,10 @@ class PromptResponse(BaseModel):
     evidence: Optional[List[Evidence]] = None
     citations: Optional[List[str]] = None
     steps: Optional[List[Step]] = None
+    ground_truth: Optional[int] = None
+    topics: Optional[List[str]] = None
+    resolved_at: Optional[str] = None
+    resolved_by: Optional[str] = None
 
 
 class LeaderboardEntry(BaseModel):
@@ -194,6 +198,40 @@ def generate_demo_response(prompt: str) -> str:
     return random.choice(templates)
 
 
+def extract_topics_from_prompt(prompt: str) -> List[str]:
+    """Extract relevant topics from claim text for source matching.
+    
+    Uses keyword matching to identify claim categories.
+    Returns list of topics that map to credible_sources.json categories.
+    """
+    prompt_lower = prompt.lower()
+    topics = []
+    
+    topic_keywords = {
+        "Technology": ["tech", "ai", "software", "app", "computer", "internet", "digital", "cyber", "startup"],
+        "Finance": ["market", "stock", "finance", "economy", "rbi", "bank", "investment", "crypto", "bitcoin"],
+        "Sports": ["sport", "game", "player", "team", "match", "tournament", "league"],
+        "Sports/Cricket": ["cricket", "ipl", "bcci", "test match", "odi", "t20", "wicket", "batsman"],
+        "Sports/Football": ["football", "soccer", "fifa", "premier league", "goal", "striker"],
+        "Science/Health": ["health", "medical", "doctor", "hospital", "disease", "vaccine", "covid", "medicine"],
+        "Science/General": ["science", "research", "study", "experiment", "discovery", "nasa", "space"],
+        "News/India": ["india", "mumbai", "delhi", "bangalore", "modi", "parliament", "rupee"],
+        "Government/India": ["government", "ministry", "pib", "policy", "law", "election"],
+        "Environment": ["climate", "environment", "pollution", "carbon", "green", "wildlife"],
+        "Aviation": ["flight", "airline", "airport", "aviation", "plane", "pilot"],
+        "Fact-Checking": ["fake", "hoax", "rumor", "viral", "forward", "whatsapp"],
+    }
+    
+    for topic, keywords in topic_keywords.items():
+        if any(keyword in prompt_lower for keyword in keywords):
+            topics.append(topic)
+    
+    if not topics:
+        topics = ["General"]
+    
+    return topics
+
+
 
 @app.post("/prompts", response_model=PromptResponse)
 async def create_prompt(request: PromptRequest) -> PromptResponse:
@@ -214,10 +252,12 @@ async def create_prompt(request: PromptRequest) -> PromptResponse:
     
     # Run Agent Synchronously
     print(f"Processing request {run_id}: {request.prompt}")
+    confidence = 0.0
     try:
         result = worker.run(job)
         final_answer = result["answer"]
         tool_outputs = result["tools"]
+        confidence = result.get("confidence", 0.0)
         
         # Clean up final_answer to remove "Sources:" block
         import re
@@ -227,6 +267,7 @@ async def create_prompt(request: PromptRequest) -> PromptResponse:
         print(f"Error running agent: {e}")
         final_answer = f"Error processing request: {str(e)}"
         tool_outputs = []
+        confidence = 0.0
 
     # Map Tool Outputs to Evidence Format
     evidence = []
@@ -264,17 +305,26 @@ async def create_prompt(request: PromptRequest) -> PromptResponse:
             "tool_output": output.get("content", "")[:500] + "..." if len(output.get("content", "")) > 500 else output.get("content", "")
         })
 
+    from datetime import datetime
+    
+    topics = extract_topics_from_prompt(request.prompt)
+    
     run_payload = {
         "run_id": run_id,
         "prompt": request.prompt,
         "requester": request.user_id or "anon",
         "status": "completed",
         "provisional_answer": final_answer,
-        "confidence": result.get("confidence", 0.0),
-        "votes": [], # Votes will be added later by the community
+        "confidence": confidence,
+        "votes": [],
         "evidence": evidence,
         "sources": sources,
         "steps": steps,
+        "topics": topics,
+        "created_at": datetime.now().isoformat(),
+        "ground_truth": None,
+        "resolved_at": None,
+        "resolved_by": None,
     }
     
     # Persist run (optional, as worker already persists)
@@ -313,6 +363,10 @@ async def get_run_status(run_id: str) -> PromptResponse:
         evidence=formatted_evidence,
         citations=run.get("citations", []),
         steps=run.get("steps", []),
+        ground_truth=run.get("ground_truth"),
+        topics=run.get("topics", []),
+        resolved_at=run.get("resolved_at"),
+        resolved_by=run.get("resolved_by"),
     )
 
 
@@ -332,6 +386,51 @@ async def get_leaderboard() -> LeaderboardResponse:
     ]
     return LeaderboardResponse(entries=entries)
 
+
+class ScoreResponse(BaseModel):
+    scored: bool
+    run_id: str
+    ground_truth: Optional[int] = None
+    correct_voters: List[str] = []
+    incorrect_voters: List[str] = []
+
+
+@app.post("/admin/score/{run_id}", response_model=ScoreResponse)
+async def score_claim(run_id: str) -> ScoreResponse:
+    """Awards points to voters after claim resolution.
+    
+    Compares each vote against ground_truth and categorizes voters.
+    In production, this would call VeriVerse API to award points.
+    """
+    run = get_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found.")
+    
+    ground_truth = run.get("ground_truth")
+    if ground_truth is None:
+        raise HTTPException(status_code=400, detail="Claim has not been resolved yet.")
+    
+    correct_voters = []
+    incorrect_voters = []
+    
+    for vote in run.get("votes", []):
+        user_id = vote.get("user_id")
+        vote_value = vote.get("vote")
+        
+        if vote_value == ground_truth:
+            correct_voters.append(user_id)
+        else:
+            incorrect_voters.append(user_id)
+    
+    return ScoreResponse(
+        scored=True,
+        run_id=run_id,
+        ground_truth=ground_truth,
+        correct_voters=correct_voters,
+        incorrect_voters=incorrect_voters,
+    )
+
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=5000)

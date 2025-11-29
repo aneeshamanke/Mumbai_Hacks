@@ -1,0 +1,123 @@
+{
+  "News/General": [
+    "reuters.com",
+    "apnews.com",
+    "bbc.com",
+    "npr.org",
+    "theguardian.com",
+    "nytimes.com",
+    "washingtonpost.com",
+    "wsj.com"
+  ],
+  "News/India": [
+    "thehindu.com",
+    "indianexpress.com",
+    "hindustantimes.com",
+    "ndtv.com",
+    "livemint.com",
+    "economictimes.indiatimes.com",
+    "business-standard.com",
+    "pib.gov.in"
+  ],
+  "Fact-Checking": [
+    "snopes.com",
+    "factcheck.org",
+    "politifact.com",
+    "fullfact.org",
+    "altnews.in",
+    "boomlive.in",
+    "thequint.com/news/webqoof"
+  ],
+  "Science/General": [
+    "nature.com",
+    "science.org",
+    "scientificamerican.com",
+    "newscientist.com",
+    "sciencedaily.com",
+    "phys.org"
+  ],
+  "Science/Health": [
+    "who.int",
+    "cdc.gov",
+    "nih.gov",
+    "mayoclinic.org",
+    "webmd.com",
+    "healthline.com",
+    "medscape.com"
+  ],
+  "Technology": [
+    "techcrunch.com",
+    "theverge.com",
+    "wired.com",
+    "arstechnica.com",
+    "zdnet.com",
+    "cnet.com",
+    "thenextweb.com"
+  ],
+  "Finance": [
+    "bloomberg.com",
+    "ft.com",
+    "marketwatch.com",
+    "cnbc.com",
+    "moneycontrol.com",
+    "rbi.org.in",
+    "sebi.gov.in"
+  ],
+  "Sports": [
+    "espn.com",
+    "espncricinfo.com",
+    "sports.yahoo.com",
+    "bbc.com/sport",
+    "skysports.com",
+    "goal.com"
+  ],
+  "Sports/Cricket": [
+    "espncricinfo.com",
+    "cricbuzz.com",
+    "icc-cricket.com",
+    "bcci.tv"
+  ],
+  "Sports/Football": [
+    "goal.com",
+    "transfermarkt.com",
+    "fifa.com",
+    "uefa.com"
+  ],
+  "Government/India": [
+    "india.gov.in",
+    "pib.gov.in",
+    "mygov.in",
+    "data.gov.in"
+  ],
+  "Government/US": [
+    "usa.gov",
+    "whitehouse.gov",
+    "congress.gov",
+    "state.gov"
+  ],
+  "Education": [
+    "edu.gov",
+    "ugc.ac.in",
+    "education.gov.in",
+    "ncert.nic.in"
+  ],
+  "Environment": [
+    "epa.gov",
+    "climate.nasa.gov",
+    "ipcc.ch",
+    "worldwildlife.org",
+    "greenpeace.org"
+  ],
+  "Aviation": [
+    "flightradar24.com",
+    "aviation-safety.net",
+    "faa.gov",
+    "icao.int"
+  ],
+  "General": [
+    "wikipedia.org",
+    "britannica.com",
+    "reuters.com",
+    "apnews.com"
+  ]
+}

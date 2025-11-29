@@ -1,0 +1,100 @@
+Add automated moderator resolution system:
+
+1. Create credible_sources.json in /data:
+   - Copy the entire source registry provided
+   - Format: {"Category/Subcategory": ["domain1.com", "domain2.org"]}
+
+2. Create resolution_worker.py:
+```python
+   import json
+   from shared.storage import load_runs, update_run, get_run
+   from datetime import datetime, timedelta
+   
+   SOURCES = json.load(open("data/credible_sources.json"))
+   
+   def get_sources_for_topics(topics):
+       """Map claim topics to credible domains"""
+       domains = []
+       for topic in topics:
+           # Match "Sports" or "Sports/Cricket"
+           for key in SOURCES:
+               if topic.lower() in key.lower():
+                   domains.extend(SOURCES[key])
+       return list(set(domains))
+   
+   def search_credible_sources(claim_text, domains):
+       """Use web_search but limit to domains"""
+       # Import your existing web_search tool
+       query = f"{claim_text} site:({' OR site:'.join(domains)})"
+       results = web_search(query)
+       
+       # Analyze results for verdict
+       if contains_confirmation(results):
+           return 1  # TRUE
+       elif contains_denial(results):
+           return -1  # FALSE
+       return None  # UNVERIFIABLE
+   
+   def resolve_pending_claims():
+       runs = load_runs()
+       
+       for run_id, run in runs.items():
+           # Skip already resolved
+           if run.get("ground_truth") is not None:
+               continue
+           
+           # Check if 1+ hours old
+           created = datetime.fromisoformat(run.get("created_at", datetime.now().isoformat()))
+           if datetime.now() - created < timedelta(hours=1):
+               continue
+           
+           # Get topics from claim (you'll need to store this)
+           topics = run.get("topics", ["General"])
+           sources = get_sources_for_topics(topics)
+           
+           if not sources:
+               continue
+           
+           verdict = search_credible_sources(run["prompt"], sources)
+           
+           if verdict is not None:
+               update_run(
+                   run_id,
+                   ground_truth=verdict,
+                   status="verified",
+                   resolved_at=datetime.now().isoformat(),
+                   resolved_by="moderator_agent"
+               )
+               print(f"Resolved {run_id}: {verdict}")
+   
+   if __name__ == "__main__":
+       while True:
+           resolve_pending_claims()
+           time.sleep(3600)  # Run hourly
+```
+
+3. Update api_gateway/main.py:
+   - Add ground_truth field to PromptResponse
+   - When creating run, extract topics from prompt using LLM
+   - Store topics in run payload
+
+4. Add scoring endpoint:
+```python
+   @app.post("/admin/score/{run_id}")
+   async def score_claim(run_id: str):
+       """Awards points after resolution"""
+       run = get_run(run_id)
+       ground_truth = run.get("ground_truth")
+       
+       for vote in run.get("votes", []):
+           if vote["vote"] == ground_truth:
+               # Correct - award points via callback to VeriVerse
+               # POST to VeriVerse /api/users/{user_id}/award-points
+               pass
+       
+       return {"scored": True}
+```
+
+5. Start worker:
+   - Add to README: `python resolution_worker.py &`
+   - Worker runs every hour checking pending claims
