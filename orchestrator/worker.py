@@ -60,6 +60,15 @@ class AgentRouter:
         try:
             response = self.model.generate_content(expansion_prompt)
             expanded_prompt = response.text.strip()
+            if not expanded_prompt:
+                print(f"  [Query Expansion] Empty response. Using original prompt.")
+                return prompt
+            
+            # Guardrail check: If the model refuses to expand (e.g. "I cannot..."), fallback to original
+            if expanded_prompt.lower().startswith(("i cannot", "i am unable", "i'm unable", "sorry")):
+                print(f"  [Query Expansion] Refusal detected ('{expanded_prompt[:50]}...'). Using original prompt.")
+                return prompt
+
             print(f"  [Query Expansion] Original: '{prompt}' -> Expanded: '{expanded_prompt}'")
             return expanded_prompt
         except Exception as e:
