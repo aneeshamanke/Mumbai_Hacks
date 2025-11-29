@@ -41,3 +41,11 @@ outputType = "webview"
 [[ports]]
 localPort = 5000
 externalPort = 80
+
+[[ports]]
+localPort = 33989
+externalPort = 3000
+
+[deployment]
+deploymentTarget = "autoscale"
+run = ["python", "-m", "uvicorn", "api_gateway.main:app", "--host", "0.0.0.0", "--port", "5000"]
