@@ -5,7 +5,7 @@
 ![Gemini](https://img.shields.io/badge/Google%20Gemini-AI-8E75B2?style=for-the-badge)
 ![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
 
-**VeriVerse** is an autonomous AI agent designed to combat misinformation. It combines the reasoning power of **Google Gemini** with real-time **Tavily Search** to verify facts, debunk myths, and provide cited, trustworthy answers.
+**VeriVerse** is an autonomous AI agent designed to combat misinformation. It combines the reasoning power of **Google Gemini** with real-time web search tools to verify facts, debunk myths, and provide cited, trustworthy answers.
 
 ---
 
@@ -15,7 +15,7 @@ In an era of AI hallucinations and fake news, VeriVerse stands out by prioritizi
 
 - **🛡️ Anti-Hallucination**: Unlike standard LLMs, VeriVerse **must** cite its sources. If it can't find evidence, it admits it.
 - **🔄 Self-Correcting**: Uses a **ReAct (Reasoning + Acting)** loop. If a search fails, it adjusts its query and tries again.
-- **⚡ Real-Time Knowledge**: Connected to the live internet via Tavily, not limited by training data cutoffs.
+- **⚡ Real-Time Knowledge**: Connected to the live internet, not limited by training data cutoffs.
 - **🧹 Clean & Safe**: Built-in guardrails against harmful content and automatic output cleaning for seamless frontend integration.
 
 ---
@@ -26,12 +26,12 @@ VeriVerse uses a modular **Orchestrator-Worker** pattern to manage complex verif
 
 ```mermaid
 graph TD
-    User[User Request] --> API[API Gateway (FastAPI)]
-    API --> Worker[Orchestrator Worker]
+    User["User Request"] --> API["API Gateway (FastAPI)"]
+    API --> Worker["Orchestrator Worker"]
     
     subgraph "Agent Core (ReAct Loop)"
-        Worker --> Router[Agent Router]
-        Router -->|1. Expand Query| LLM[Gemini 1.5 Flash]
+        Worker --> Router["Agent Router"]
+        Router -->|1. Expand Query| LLM["Gemini 1.5 Flash"]
         LLM -->|2. Decide Action| Router
         Router -->|3. Execute Tool| Tools
         Tools -->|4. Return Observation| Router
@@ -39,11 +39,11 @@ graph TD
     end
     
     subgraph "Toolbelt"
-        Tools --> Tavily[Web Search]
-        Tools --> News[News Search]
-        Tools --> Wiki[Wikipedia]
-        Tools --> Weather[Open-Meteo]
-        Tools --> Finance[YFinance]
+        Tools --> Web["Web Search"]
+        Tools --> News["News Search"]
+        Tools --> Wiki["Wikipedia"]
+        Tools --> Weather["Weather API"]
+        Tools --> Finance["Stock Data"]
     end
 ```
 
@@ -69,15 +69,15 @@ graph TD
 
 ## 🛠️ Tools
 
-| Tool | Description | Provider |
-| :--- | :--- | :--- |
-| `web_search` | Deep web search for current events and facts. | **Tavily** |
-| `get_news` | Fetch the latest headlines and articles. | **Tavily** |
-| `wikipedia` | Retrieve detailed, factual summaries. | **Wikipedia** |
-| `get_weather` | Real-time weather conditions and humidity. | **Open-Meteo** |
-| `get_stock_price` | Live stock market data. | **YFinance** |
-| `calculator` | Precise mathematical calculations. | **Python** |
-| `get_time` | Accurate local time lookup. | **System** |
+| Tool | Description |
+| :--- | :--- |
+| `web_search` | Deep web search for current events and facts. |
+| `get_news` | Fetch the latest headlines and articles. |
+| `wikipedia` | Retrieve detailed, factual summaries. |
+| `get_weather` | Real-time weather conditions and humidity. |
+| `get_stock_price` | Live stock market data. |
+| `calculator` | Precise mathematical calculations. |
+| `get_time` | Accurate local time lookup. |
 
 ---
 
@@ -85,7 +85,7 @@ graph TD
 
 ### 1. Prerequisites
 - Python 3.9+
-- API Keys for **Google Gemini** and **Tavily**.
+- API Keys for **Google Gemini** and **Search Provider**.
 
 ### 2. Installation
 ```bash
@@ -101,7 +101,7 @@ pip install -r requirements.txt
 Create a `config/.env` file:
 ```ini
 GEMINI_API_KEY=your_gemini_key_here
-TAVILY_API_KEY=your_tavily_key_here
+TAVILY_API_KEY=your_search_key_here
 ```
 
 ### 4. Run the Server
